@@ -108,16 +108,17 @@ async def show_models():
     existing_models = set()
     model_cards = []
     for endpoint in endpoints:
-        if endpoint.model_name in existing_models:
-            continue
-        model_card = ModelCard(
-            id=endpoint.model_name,
-            object="model",
-            created=endpoint.added_timestamp,
-            owned_by="vllm",
-        )
-        model_cards.append(model_card)
-        existing_models.add(endpoint.model_name)
+        for model_name in endpoint.model_names:
+            if model_name in existing_models:
+                continue
+            model_card = ModelCard(
+                id=model_name,
+                object="model",
+                created=endpoint.added_timestamp,
+                owned_by="vllm",
+            )
+            model_cards.append(model_card)
+            existing_models.add(model_name)
     model_list = ModelList(data=model_cards)
     return JSONResponse(content=model_list.model_dump())
 

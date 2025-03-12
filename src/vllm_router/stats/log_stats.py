@@ -42,7 +42,7 @@ def log_stats(app: FastAPI, interval: int = 10):
         request_stats = app.state.request_stats_monitor.get_request_stats(time.time())
         for endpoint in endpoints:
             url = endpoint.url
-            logstr += f"Model: {endpoint.model_name}\n"
+            logstr += f"Model(s): {', '.join(endpoint.model_names)}\n"
             logstr += f"Server: {url}\n"
             if url in engine_stats:
                 es = engine_stats[url]
