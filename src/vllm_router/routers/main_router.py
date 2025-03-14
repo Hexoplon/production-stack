@@ -108,7 +108,7 @@ async def show_models():
     existing_models = set()
     model_cards = []
     for endpoint in endpoints:
-        if endpoint.model_names is None:
+        if endpoint is None:
             continue
 
         for model_name in endpoint.model_names:
