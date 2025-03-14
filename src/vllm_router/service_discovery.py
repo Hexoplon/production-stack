@@ -19,6 +19,8 @@ _global_service_discovery: "Optional[ServiceDiscovery]" = None
 class ServiceDiscoveryType(enum.Enum):
     STATIC = "static"
     K8S = "k8s"
+    COMBINED = "combined"
+    EXTERNAL = "external"
 
 
 @dataclass
@@ -272,6 +274,130 @@ class K8sServiceDiscovery(ServiceDiscovery):
         self.watcher_thread.join()
 
 
+class CombinedServiceDiscovery(ServiceDiscovery):
+    def __init__(self, *service_discoveries: ServiceDiscovery):
+        """
+        Initialize a combined service discovery module that merges results from
+        multiple discovery mechanisms.
+
+        Args:
+            *service_discoveries: Variable number of ServiceDiscovery instances
+        """
+        self.service_discoveries = service_discoveries
+
+        # Validate that we have at least one service discovery
+        if not service_discoveries:
+            raise ValueError("At least one service discovery module must be provided")
+
+    def get_endpoint_info(self) -> List[EndpointInfo]:
+        """
+        Get the combined URLs from all service discovery mechanisms.
+
+        Returns:
+            a combined list of EndpointInfo objects from all sources
+        """
+        all_endpoints = []
+        for sd in self.service_discoveries:
+            all_endpoints.extend(sd.get_endpoint_info())
+        return all_endpoints
+
+    def get_health(self) -> bool:
+        """
+        Check if all service discovery modules are healthy.
+
+        Returns:
+            True if all service discovery modules are healthy, False otherwise
+        """
+        return all(sd.get_health() for sd in self.service_discoveries)
+
+    def close(self) -> None:
+        """
+        Close all service discovery modules.
+        """
+        for sd in self.service_discoveries:
+            sd.close()
+
+
+class ExternalServiceDiscovery(ServiceDiscovery):
+    def __init__(self, urls: List[str]):
+        """
+        Initialize the External service discovery module. This module
+        automatically discovers models from OpenAI-compatible endpoints
+        by querying their /v1/models endpoint.
+
+        Args:
+            urls: List of URLs of external OpenAI-compatible backends
+        """
+        self.urls = urls
+        self.endpoint_infos: List[EndpointInfo] = []
+        self.added_timestamp = int(time.time())
+
+        # Discover models for all endpoints
+        self._discover_models()
+
+    def _discover_models(self):
+        """
+        Discover models for all external endpoints by querying
+        their /v1/models endpoint.
+        """
+        self.endpoint_infos = []
+        for url in self.urls:
+            discovered_models = self._get_model_names(url)
+            if discovered_models:
+                self.endpoint_infos.append(
+                    EndpointInfo(
+                        url=url,
+                        model_names=discovered_models,
+                        added_timestamp=self.added_timestamp
+                    )
+                )
+                logger.info(f"Discovered models for external endpoint {url}: {discovered_models}")
+            else:
+                logger.warning(f"Failed to discover models for external endpoint {url}, skipping")
+
+    def _get_model_names(self, backend_url: str) -> Optional[List[str]]:
+        """
+        Get the model names of the external endpoint by querying the
+        '/v1/models' endpoint.
+
+        Args:
+            backend_url: the URL of the backend
+
+        Returns:
+            the model names of the external endpoint, or None if failed
+        """
+        url = f"{backend_url}/v1/models"
+        try:
+            headers = None
+            if VLLM_API_KEY := os.getenv("VLLM_API_KEY"):
+                logger.info(f"Using vllm server authentication")
+                headers = {"Authorization": f"Bearer {VLLM_API_KEY}"}
+            response = requests.get(url, headers=headers, timeout=5)
+            response.raise_for_status()
+
+            response_json = response.json()
+            if "data" not in response_json:
+                return None
+
+            model_names = [model["id"] for model in response_json["data"]]
+            if len(model_names) == 0:
+                return None
+
+            return model_names
+        except Exception as e:
+            logger.error(f"Failed to get model names from {url}: {e}")
+            return None
+
+    def get_endpoint_info(self) -> List[EndpointInfo]:
+        """
+        Get the URLs and models of the external endpoints.
+
+        Returns:
+            a list of EndpointInfo objects
+        """
+        return self.endpoint_infos
+
+
 def _create_service_discovery(
     service_discovery_type: ServiceDiscoveryType, *args, **kwargs
 ) -> ServiceDiscovery:
@@ -291,6 +417,61 @@ def _create_service_discovery(
         return StaticServiceDiscovery(*args, **kwargs)
     elif service_discovery_type == ServiceDiscoveryType.K8S:
         return K8sServiceDiscovery(*args, **kwargs)
+    elif service_discovery_type == ServiceDiscoveryType.EXTERNAL:
+        return ExternalServiceDiscovery(*args, **kwargs)
+    elif service_discovery_type == ServiceDiscoveryType.COMBINED:
+        # Create component parts based on what's available
+        service_discoveries = []
+
+        # Process static service discovery part if URLs are provided
+        static_urls = kwargs.get("static_urls", [])
+        # Handle empty string or None
+        if static_urls is None or (isinstance(static_urls, list) and len(static_urls) == 0) or static_urls == "":
+            static_urls = []
+
+        # If we have static URLs, create static service discovery
+        if static_urls:
+            static_models = kwargs.get("static_models", [])
+            # Handle empty string or None
+            if static_models is None or (isinstance(static_models, list) and len(static_models) == 0) or static_models == "":
+                # Skip static service discovery if models are not provided
+                logger.warning("Static backends provided but no models specified, skipping static discovery")
+            else:
+                # Verify that static_urls and static_models have the same length
+                if len(static_urls) != len(static_models):
+                    logger.warning(f"Static URLs and models have different lengths ({len(static_urls)} vs {len(static_models)}), skipping static discovery")
+                else:
+                    service_discoveries.append(StaticServiceDiscovery(static_urls, static_models))
+
+        # Process K8s service discovery part if namespace and port are provided
+        k8s_namespace = kwargs.get("k8s_namespace")
+        k8s_port = kwargs.get("k8s_port")
+        k8s_label_selector = kwargs.get("k8s_label_selector", "")
+
+        # Skip k8s discovery if namespace is empty or None
+        if k8s_namespace and k8s_namespace != "" and k8s_port:
+            service_discoveries.append(K8sServiceDiscovery(k8s_namespace, k8s_port, k8s_label_selector))
+
+        # Process external service discovery part if URLs are provided
+        external_urls = kwargs.get("external_urls", [])
+        # Handle empty string or None
+        if external_urls is None or (isinstance(external_urls, list) and len(external_urls) == 0) or external_urls == "":
+            external_urls = []
+
+        # If we have external URLs, create external service discovery
+        if external_urls:
+            service_discoveries.append(ExternalServiceDiscovery(external_urls))
+
+        # At least one service discovery must be provided
+        if not service_discoveries:
+            raise ValueError("At least one service discovery module must be configured")
+
+        # If only one is provided, use that one directly
+        if len(service_discoveries) == 1:
+            return service_discoveries[0]
+
+        # Otherwise, use combined service discovery
+        return CombinedServiceDiscovery(*service_discoveries)
     else:
         raise ValueError("Invalid service discovery type")
 

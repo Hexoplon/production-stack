@@ -39,6 +39,29 @@ def validate_args(args):
             )
     if args.service_discovery == "k8s" and args.k8s_port is None:
         raise ValueError("K8s port must be provided when using K8s service discovery.")
+    if args.service_discovery == "external":
+        if args.external_backends is None or args.external_backends == "":
+            raise ValueError(
+                "External backends must be provided when using external service discovery."
+            )
+    if args.service_discovery == "combined":
+        # For combined mode, we allow any combination of static, k8s, and external configs,
+        # but at least one of them must be provided
+        has_static = args.static_backends is not None and args.static_backends != ""
+        has_k8s = args.k8s_namespace is not None and args.k8s_namespace != "" and args.k8s_port is not None
+        has_external = args.external_backends is not None and args.external_backends != ""
+
+        if not has_static and not has_k8s and not has_external:
+            raise ValueError(
+                "At least one of static backends, K8s configuration, or external backends must be provided for combined service discovery."
+            )
+        # If k8s config is provided, port is required
+        if args.k8s_namespace and args.k8s_namespace != "" and args.k8s_port is None:
+            raise ValueError("K8s port must be provided when K8s namespace is specified in combined mode.")
+
+        # If static backends are provided, static models are required
+        if has_static and (args.static_models is None or args.static_models == ""):
+            raise ValueError("Static models must be provided when static backends are specified in combined mode.")
     if args.routing_logic == "session" and args.session_key is None:
         raise ValueError(
             "Session key must be provided when using session routing logic."
@@ -62,7 +85,7 @@ def parse_args():
     parser.add_argument(
         "--service-discovery",
         required=True,
-        choices=["static", "k8s"],
+        choices=["static", "k8s", "combined", "external"],
         help="The service discovery type.",
     )
     parser.add_argument(
@@ -76,6 +99,12 @@ def parse_args():
         type=str,
         default=None,
         help="The models of static backends, separated by commas. E.g., model1,model2",
+    )
+    parser.add_argument(
+        "--external-backends",
+        type=str,
+        default=None,
+        help="The URLs of external OpenAI-compatible backends from which to auto-discover models, separated by commas. E.g., http://localhost:8000,http://localhost:8001",
     )
     parser.add_argument(
         "--k8s-port",

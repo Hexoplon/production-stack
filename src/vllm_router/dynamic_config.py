@@ -31,6 +31,7 @@ class DynamicRouterConfig:
     # Service discovery configurations
     static_backends: Optional[str] = None
     static_models: Optional[str] = None
+    external_backends: Optional[str] = None
     k8s_port: Optional[int] = None
     k8s_namespace: Optional[str] = None
     k8s_label_selector: Optional[str] = None
@@ -58,6 +59,7 @@ class DynamicRouterConfig:
             service_discovery=args.service_discovery,
             static_backends=args.static_backends,
             static_models=args.static_models,
+            external_backends=args.external_backends,
             k8s_port=args.k8s_port,
             k8s_namespace=args.k8s_namespace,
             k8s_label_selector=args.k8s_label_selector,
@@ -126,6 +128,28 @@ class DynamicConfigWatcher(metaclass=SingletonMeta):
                 namespace=config.k8s_namespace,
                 port=config.k8s_port,
                 label_selector=config.k8s_label_selector,
+            )
+        elif config.service_discovery == "external":
+            reconfigure_service_discovery(
+                ServiceDiscoveryType.EXTERNAL,
+                urls=parse_static_urls(config.external_backends),
+            )
+        elif config.service_discovery == "combined":
+            # Get static config if available
+            static_urls = parse_static_urls(config.static_backends) if config.static_backends else []
+            static_models = parse_static_model_names(config.static_models) if config.static_models else None
+
+            # Get external config if available
+            external_urls = parse_static_urls(config.external_backends) if config.external_backends else []
+
+            reconfigure_service_discovery(
+                ServiceDiscoveryType.COMBINED,
+                static_urls=static_urls,
+                static_models=static_models,
+                k8s_namespace=config.k8s_namespace,
+                k8s_port=config.k8s_port,
+                k8s_label_selector=config.k8s_label_selector,
+                external_urls=external_urls,
             )
         else:
             raise ValueError(

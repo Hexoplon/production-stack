@@ -118,6 +118,28 @@ def initialize_all(app: FastAPI, args):
             port=args.k8s_port,
             label_selector=args.k8s_label_selector,
         )
+    elif args.service_discovery == "external":
+        initialize_service_discovery(
+            ServiceDiscoveryType.EXTERNAL,
+            urls=parse_static_urls(args.external_backends),
+        )
+    elif args.service_discovery == "combined":
+        # Get static config if available
+        static_urls = parse_static_urls(args.static_backends) if args.static_backends else []
+        static_models = parse_static_model_names(args.static_models) if args.static_models else None
+
+        # Get external config if available
+        external_urls = parse_static_urls(args.external_backends) if args.external_backends else []
+
+        initialize_service_discovery(
+            ServiceDiscoveryType.COMBINED,
+            static_urls=static_urls,
+            static_models=static_models,
+            k8s_namespace=args.k8s_namespace,
+            k8s_port=args.k8s_port,
+            k8s_label_selector=args.k8s_label_selector,
+            external_urls=external_urls,
+        )
     else:
         raise ValueError(f"Invalid service discovery type: {args.service_discovery}")
 
