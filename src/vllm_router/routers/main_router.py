@@ -111,6 +111,9 @@ async def show_models():
         if endpoint is None:
             continue
 
+        if endpoint.model_names is None:
+            continue
+
         for model_name in endpoint.model_names:
             if model_name in existing_models:
                 continue
