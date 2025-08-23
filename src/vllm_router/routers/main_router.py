@@ -59,6 +59,11 @@ async def route_chat_completion(request: Request, background_tasks: BackgroundTa
     )
 
 
+@main_router.post("/v1/responses")
+async def route_responses(request: Request, background_tasks: BackgroundTasks):
+    return await route_general_request(request, "/v1/responses", background_tasks)
+
+
 @main_router.post("/v1/completions")
 async def route_completion(request: Request, background_tasks: BackgroundTasks):
     return await route_general_request(request, "/v1/completions", background_tasks)
